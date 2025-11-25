@@ -1,0 +1,38 @@
+# Why?
+Because the vendor support stated it can't be done (that is, I can't use my own ringtones).
+Jokes aside, that's actually the real reason why I started to dig around and ended up with this modded FW.
+I just wanted to crank up the loudness as sometimes it was hard to hear the sound over other things like washing machine. I've asked directly if there's a way to make those built-in sounds louder and got "nope" as an answer. This was a problem, as out of 4 ringtones, I consider just 1 to be somewhat acceptable in terms of loudness and ringtone-like style, the rest is more or less atrocious and too quiet. That's when I started going down the first rabbit hole.
+
+# How?
+This is a regular network device, it has to talk to other stuff (at least the doorbell). It also has web interface, but it didn't look like it could be exploited. I didn't want to go as low as soldering to jtag pins or something similar, so I started with a simple portscan. After a while I could see 7 ports open, out of which one got my attention - 9900. Tried to get in with ssh, no juice. Stepped down to telnet. Bingo.
+
+Here's when it became more interesting, as it was asking for creds. Which I didn't have, obviously. The ones from webgui didn't work, so it had to be something else and I didn't hope the vendor would help me out, so I had to find another way. And brute-forcing wasn't one of them.
+
+Thankfully, Kenik firmware can be found online, as these devices offer an easy way to upgrade - you just have to provide them an *.img file in web gui and it'll happily update itself, fixing bugs and sometimes even introducing new features. While those files aren't too big, and they could hardly fit everything inside, it was worth peeking inside. Turns out, these updates are xz-compressed squashfs. On to the unpacking then and down the second rabbit hole.
+
+Once I got the whole FW unpacked, I started digging again. Init script starts some processes, not much else can be said - most things (interesting ones, at least) are binaries. Many hexdump/strings/greps later, I narrowed down which file had something to do with the login process. Ghidra it is then. Third and final(?) rabbit hole. Decompiling the "toolbox" allowed to discover the hardcoded creds. It sounded too easy to be true but, in the end, they worked.
+
+Okay, so I could now log in. The default shell was anything but useful for a myriad of reasons. I had to step up a bit as I knew I'd have to transfer some files in & out (at the time I had no idea how prophetic that was). Since there's no way to do 'scp' or anything like it, some caveman-style techniques have to be implemented. Found proper busybox [ARM, 32b, EABI5 v 1 (SYSV)], converted it to b64, pasted it in some file on the device (it took *ages*), decoded it and bam -  we've got the first stepping stone.
+
+From this point onwards, all the files could be transferred directly with 'nc', which turned initial setup from troublesome & slow to easy as pie & blazing fast.
+
+Once I got hold of what's what and how it's organized, I dumped the whole flash (which consists of 6 partitions), so in case something went terribly wrong, I could use to revive the device via jtag or in any other way.
+From the structure it looked like that the "update file" contents are almost 1:1 with 4th partition. Which is RW. Good. But the init scripts that could invoke something we put on that writable piece of flash are on another partition. Which is RO. Bad.
+
+For some time I got around that by doing a bind mounts here and there, so I wouldn't need to alter the RO part of the flash. This had a huge upside - if I broke anything, a simple reboot would restore it to a working state, but once I got past a certain point, I had to introduce persistence by altering the RO partition.
+
+I made changes to the unpacked squashfs, squashed it again (with "-comp xz -b 524288 -noappend", matching the default) and tried to feed the updater with the file. Obviously (duh) it stated it's bad, so the only other way was to upload the file directly to the device and wrote it directly with 'dd' to the 4th partition (/dev/mtdblock4). Everything went fine and after a reboot I had busybox integrated into the main image, altered startup script that ran telnet deamon on custom port and allowed me to set up bind mounts that would take effect during device startup, before the critical processes were started, making later debugging almost trivial.
+
+Many, many hours later I ended up with a working webgui modification which handled wav files, even more hours later I added mp3 support (the device reads only wav files, so there's a conversion done on the fly with mpg123).
+
+The last thing was to figure out how to make the upgrade process to a custom FW a bit easier. Welcome back, Ghidra.
+Found the piece of code that is responsible for checking the FW file, cross-checked it with the official FW files that were available, found a pattern, ended up with a script that constructs and glues a proper footer to the squashfs file, so it'll get accepted by the binary that handles upgrades (read, verify, flash, reboot).
+
+Many fixes later a 'final' FW version has been created (it's based on v.20250611).
+
+# Sort-a QA
+- Only the third file can be replaced with the web gui, because there's only so much space on the flash and I don't want to cause excessive wear should anyone go crazy with ringtone replacement.
+- It's the third because I consider it the worst of the bunch (there's no accounting for taste).
+- Nobody's stopping you from setting up 4 custom ringtones if you really want to. That is, if you're familiar with the Linux basics. If you don't, stick to the web gui.
+- The mod doesn't simply allow to crank up the loudness - you do that by altering the file (there are on-line 'converters' that do that kind of thing)
+- The maximum "ring time" that the default FW allows is 120 seconds (how long will the panel play the ringer sound). Thus the 12MB limit for WAV files. While MP3 is converted, it's also cut at the 120 seconds mark. It doesn't make any sense to have limits higher than that, as the device simply stops playing when it hits the set mark. This doesn't affect shorter ringers (i.e. built-in ones), as they're simply looped.
