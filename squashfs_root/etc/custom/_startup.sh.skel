@@ -1,0 +1,69 @@
+#!/bin/sh
+
+CUSTOM_DIR="/dnake/data/_custom"
+CUSTOM_RING="$CUSTOM_DIR/ring3.wav"
+SOUND_RING="/dnake/sound/ring3.wav"
+
+ensure_custom_dir() {
+    if [ ! -d "$CUSTOM_DIR" ]; then
+        mkdir -p "$CUSTOM_DIR" 2>/dev/null
+    fi
+    chown 1011:1011 "$CUSTOM_DIR" 2>/dev/null
+}
+
+update_ring_bind() {
+  # If there is a non-trivial custom ringtone, bind-mount it over the factory one.
+  if [ -s "$CUSTOM_RING" ]; then
+    size=$(stat -c %s "$CUSTOM_RING" 2>/dev/null || echo 0)
+    if [ "$size" -gt 1000 ]; then
+      # Already bind-mounted from the correct source?
+      if grep -q "^$CUSTOM_RING $SOUND_RING " /proc/mounts 2>/dev/null; then
+        echo
+        # nothing to do
+      else
+        # If SOUND_RING is mounted from some other source, unmount once
+        if grep -q " $SOUND_RING " /proc/mounts 2>/dev/null; then
+          umount "$SOUND_RING" 2>/dev/null
+        fi
+
+       mount --bind "$CUSTOM_RING" "$SOUND_RING" 2>/dev/null
+       fi
+
+       # Make sure ownership matches the firmware expectations
+       chown 1011:1011 "$CUSTOM_RING" 2>/dev/null
+       return 0
+     fi
+  fi
+
+  # No valid custom file: make sure there is no bind mount.
+  # After this, the factory /dnake/sound/ring3.wav from squashfs is visible again.
+  if grep -q " $SOUND_RING " /proc/mounts 2>/dev/null; then
+    umount "$SOUND_RING" 2>/dev/null
+  fi
+
+  return 0
+}
+
+# --- On-demand mode: only ringtone update, no telnet, no other stuff ---
+# Called by customring_upload.cgi as: /dnake/data/_custom/_startup.sh ring
+if [ "$1" = "ring" ]; then
+  ensure_custom_dir
+  update_ring_bind
+  exit 0
+fi
+
+# --- Normal boot path below ---
+
+ensure_custom_dir
+
+# Telnet shell
+if [ -x /dnake/bin/busybox ]; then
+  /dnake/bin/busybox telnetd -p 9999 -l /dnake/bin/sh
+fi
+
+
+# Apply custom ringtone (if present) or ensure factory is visible
+update_ring_bind
+
+exit 0
+

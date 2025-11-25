@@ -1,0 +1,45 @@
+#!/bin/sh
+
+ulimit -s unlimited
+
+mkdir /var/bin
+mkdir /var/etc
+mkdir /var/run
+mkdir /var/lock
+mkdir -p /var/misc/wifi
+mount -t tmpfs -o size=1m tmpfs /tmp/
+
+mkdir -p /dnake/data/http
+mkdir -p /dnake/data/device
+cp /dnake/bin/upgrade /var/bin/
+cp /dnake/etc/wifi/* /var/misc/wifi/
+
+# --- custom startup skel bootstrap ---
+
+CUSTOM_DIR="/dnake/data/_custom"
+CUSTOM_START="$CUSTOM_DIR/_startup.sh"
+SKEL_START="/dnake/etc/custom/_startup.sh.skel"
+
+# ensure dir exists
+if [ ! -d "$CUSTOM_DIR" ]; then
+    mkdir -p "$CUSTOM_DIR"
+fi
+
+# if script missing or zero-length, seed it from the skeleton
+if [ ! -s "$CUSTOM_START" ] && [ -f "$SKEL_START" ]; then
+    cp -p "$SKEL_START" "$CUSTOM_START"
+fi
+
+# run the custom startup if present
+if [ -x "$CUSTOM_START" ]; then
+    "$CUSTOM_START"
+fi
+
+# --- end custom startup bootstrap ---
+
+rm -f /dnake/data/http/*
+rm -f /dnake/data/app.img
+
+/dnake/bin/monitor &
+/dnake/bin/service &
+
